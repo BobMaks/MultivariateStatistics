@@ -1,0 +1,134 @@
+library("MASS", lib.loc="/Library/Frameworks/R.framework/Versions/3.2/Resources/library")
+library("mda", lib.loc="/Library/Frameworks/R.framework/Versions/3.2/Resources/library")
+library("rrcov", lib.loc="/Library/Frameworks/R.framework/Versions/3.2/Resources/library")
+library("phyclust", lib.loc="/Library/Frameworks/R.framework/Versions/3.2/Resources/library")
+library("lattice", lib.loc="/Library/Frameworks/R.framework/Versions/3.2/Resources/library")
+library("grid", lib.loc="/Library/Frameworks/R.framework/Versions/3.2/Resources/library")
+# voor meer classifications zie http://machinelearningmastery.com/non-linear-classification-in-r/
+
+myData <- na.omit(stimezo)
+
+#No tranformation needed for dummy variables
+myData <- cbind(myData[,1:16],myData[,21])
+myData[,9] <- as.numeric(myData[,9])
+myData[,10] <- as.numeric(myData[,10])
+myData[,17] <- as.numeric(myData[,17])
+# subset data
+x <- as.matrix(myData[,11:16])
+y <- myData[,17]
+
+# perform LDA and 
+Test_lda <- lda(x,y)
+Test_lda # see coefficients of linear discriminants
+means <- Test_lda$means
+
+#LOO pred
+Loo_lda <- lda(x,y,CV = TRUE)
+# Loo_lda <- lda(x,y,prior = matrix(0.2,1,5),CV = TRUE)
+
+# Assess the accuracy of the prediction
+# percent correct for each category of G
+hit <- table(myData[,17], Loo_lda$class)
+prob_hit <- diag(prop.table(hit, 1))
+hitprob <- cbind(hit,prob_hit)
+# total percent correct
+prob_hit_total <- sum(diag(prop.table(hitprob)))
+
+#Wilks lambda
+Wilks <- Wilks.test(x,y)
+
+# ARI
+ARI <- RRand(y,as.numeric(Loo_lda$class))
+ARI
+
+# write out text datafile and
+# an SPSS program to read it
+#library(foreign)
+# write.foreign(myData,datafile, "Ind Ass MV.R",   package="SPSS")
+
+# Own algorithm
+LDA_own <- function(groups,data){
+  # initialisation
+  c <- length(unique(groups))
+  m <- dim(data)[2]
+  n <- dim(data)[1]
+  means <- matrix(0,m,c)
+  if (m < c-1) {d <- m} else (d<-c-1) #choose number of discriminant functions
+  
+  # Calculate the mean per group per variable
+  for (i in 1:m){ means[i,] <- tapply(data[,i],groups,mean) }
+  
+  # Within and between errors
+  G <- matrix(0,n,c) # indicator matrix corresponding with the groups
+  for (i in 1:c) {
+    G[groups==i,i] <- 1
+  } 
+  Gmeans <- G%*%t(means)
+  overall_means <- t(as.matrix(colMeans(data)))
+  overall_means <- t(replicate(n,overall_means, simplify = "matrix"))
+  
+  within_var <- t(data-Gmeans) %*% (data-Gmeans) /(n-1) # calc within matrix
+  between_var =  t(Gmeans - overall_means) %*% (Gmeans - overall_means) /(n-1) # calc between matrix
+
+  Within_Between <- solve(within_var) %*% between_var # do Within^-1 * between
+
+  #Calculate the eigenvectors
+  eigen_vec <- eigen(Within_Between)$vectors
+  eigen_val <- eigen(Within_Between)$values
+  
+  #select the discriminant functions from the eigenvectors
+  discriminant <- eigen_vec[,1:d] 
+  
+  # give output
+  ret <- list(means,discriminant,eigen_val[1:d])
+  return(ret)
+}
+
+# leave one out crossvalidation for LDA
+LOO_own <- function(groups,data) {
+  nobs = dim(data)[1]
+  predGroup <- matrix(0,nobs,1)
+  for (i in 1:nobs){ # loo cross validation
+    tempData <- data[-i,] # create subset of data
+    tempY <- groups[-i] # create subset of groups
+    predData <- as.matrix(data[i,]) # create to predict data
+    LDAtemp <- LDA_own(tempY,tempData) # perform LDA on subset
+    tempMeans <- matrix(unlist(LDAtemp[1]),ncol=dim(data)[2])
+    tempDiscriminant <- matrix(unlist(LDAtemp[2]),ncol=min(length(unique(groups))-1,dim(data[2])))
+    discriminant_scores <- t(predData) %*% tempDiscriminant # compute discriminant scores
+    discriminant_means <- tempMeans %*% tempDiscriminant # convert means to discriminant space
+    dis_scores_mat <- t(replicate(length(unique(groups)),discriminant_scores, simplify = "matrix"))
+    distance_lda_space <- diag((dis_scores_mat - discriminant_means) %*% t(dis_scores_mat - discriminant_means))
+    predGroup[i] <- which.min(distance_lda_space)
+  }
+  return (predGroup)
+}
+
+#Main
+LDA_Own <- LDA_own(y,x) 
+LOO_Own <- LOO_own(y,x)
+discriminant_function <- matrix(unlist(LDA_Own[2]),ncol=min(length(unique(y))-1,dim(x[2])))
+
+#convert points to discriminant space and select 2 most important DF
+data_lda_space <- (x %*% discriminant_function)[,1:2]
+means_lda_space <- (means %*% discriminant_function)[,1:2]
+plotData <- rbind(data_lda_space,means_lda_space)
+plotGroups <- as.matrix(append(y,rep(6,5)))
+
+#Make plot of point and group centroids in first two DF space
+xyplot(plotData[,2] ~ plotData[,1],group = plotGroups, xlab = "DF 1", ylab = "DF 2", pch = c(1,1,1,1,1,15),cex = c(1,1,1,1,1,2),ylim =c(-2,3.5), xlim = c(-1,8), asp =1)
+
+xyplot(1:6 ~ 1:6, group = 1:6) # for color codings
+
+# hitrates
+hit_own <- table(y, LOO_Own)
+prob_hit_own <- diag(prop.table(hit_own, 1))
+hitprob_own <- cbind(hit_own,prob_hit_own)
+prob_hit_total_own <- sum(diag(prop.table(hitprob_own)))
+
+hitprob_own
+hitprob
+cbind(LOO_Own,y)
+
+
+LDA_Own
